@@ -6,7 +6,7 @@ module.exports = function (app) {
   
     .get(function (req, res){
       let project = req.params.project;
-      
+      console.log('fsegrg');
     })
     
     .post(function (req, res){
