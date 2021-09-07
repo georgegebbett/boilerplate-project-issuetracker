@@ -7,6 +7,8 @@ const Firestore = require('@google-cloud/firestore');
 const db = new Firestore({
     projectId: 'fcc-issuetracker',
     keyFilename: './service-key.json',
+    ignoreUndefinedProperties: true
+
 });
 
 const bodyParser = require('body-parser');
@@ -23,10 +25,30 @@ const findProjectByName = (project_name) => {
     return projectsCollection.where('name', '==', project_name).limit(1);
 }
 
+class Issue {
+    constructor(issue_title, issue_text, created_by, assigned_to='', status_text='', project_id) {
+
+        this.issue_title = issue_title;
+        this.issue_text = issue_text;
+        this.created_by = created_by;
+        this.assigned_to = assigned_to;
+        this.status_text = status_text;
+        this.created_on = Firestore.Timestamp.fromDate(new Date());
+        this.updated_on = Firestore.Timestamp.fromDate(new Date());
+        this.open = true;
+        this.project_id = project_id;
+        };
+
+}
+
+
 
 module.exports = function (app) {
 
-  app.route('/api/issues/:project')
+    app.use(bodyParser.urlencoded({ extended: true }));
+
+
+    app.route('/api/issues/:project')
   
     .get(function (req, res){
       let projectName = req.params.project;
@@ -76,7 +98,7 @@ module.exports = function (app) {
                                   });
                               })
                               console.log('Issues retrieved:', issue_array);
-                              res.json({issues: issue_array});
+                              res.json(issue_array);
                               console.log('Response sent');
                           }, error => {
                               console.log('Error retrieving issues', error);
@@ -96,64 +118,125 @@ module.exports = function (app) {
     .post(function (req, res){
       let projectName = req.params.project;
 
-      bodyParser.json();
+      const createIssue = issue => {
+          issuesCollection.add(issue)
+              .then(data => {
+                  console.log('Issue added at ID', data.id);
+                  res.json({
+                      _id: data.id,
+                      issue_title: issue.issue_title,
+                      issue_text: issue.issue_text,
+                      created_on: issue.created_on.toDate(),
+                      updated_on: issue.updated_on.toDate(),
+                      created_by: issue.created_by,
+                      assigned_to: issue.assigned_to,
+                      open: issue.open,
+                      status_text: issue.status_text
+                  })
+              }, error => {
+                  console.log('Error creating issue');
+              })
+      }
 
-      console.log(req.body);
+        const handler = {
+            get: function(obj, prop) {
+                return prop in obj ?
+                    obj[prop] :
+                    '';
+            }
+        };
+
+      console.log('unparsed', req.body);
+      bodyParser.json();
+      console.log('parsed', req.body);
+
+
+        if (
+            req.body.issue_title === '' ||
+            req.body.issue_text === '' ||
+            req.body.created_by === '' ||
+            !req.body.hasOwnProperty('issue_title') ||
+            !req.body.hasOwnProperty('issue_text') ||
+            !req.body.hasOwnProperty('created_by')
+        ) {
+            console.log('One or more required fields missing');
+            res.json({
+                error: 'required field(s) missing'
+            });
+        }
 
       console.log('Creating issue on', projectName);
       findProjectByName(projectName).get()
           .then(projectObj => {
-              projectObj.forEach(project => {
-                  let project_id = project.id;
 
-                  if (
-                      req.body.issue_title === '' ||
-                      req.body.issue_text === '' ||
-                      req.body.created_by === ''
-                  ) {
-                      console.log('One or more required fields missing');
-                      res.json({
-                          error: 'required field(s) missing'
-                      });
-                  }
+              if (projectObj.size === 0) {
+                  console.log('Creating new project with name', projectName);
+                  projectsCollection.add({name: projectName})
+                      .then( data => {
+                          console.log('Project created');
+                          console.log(data.id);
 
-                  let new_issue = {
-                      issue_title: req.body.issue_title,
-                      issue_text: req.body.issue_text,
-                      created_by: req.body.created_by,
-                      assigned_to: req.body.assigned_to,
-                      status_text: req.body.status_text,
-                      created_on: Firestore.Timestamp.fromDate(new Date()),
-                      updated_on: Firestore.Timestamp.fromDate(new Date()),
-                      open: true,
-                      project_id
-                  }
+                          console.table(req.body);
 
-                  issuesCollection.add(new_issue)
-                      .then(data => {
-                          console.log('Issue added at ID', data.id);
-                          res.json({
-                              _id: data.id,
-                              issue_title: new_issue.issue_title,
-                              issue_text: new_issue.issue_text,
-                              created_on: new Date(new_issue.created_on.toDate()).toString(),
-                              updated_on: new Date(new_issue.updated_on.toDate()).toString(),
-                              created_by: new_issue.created_by,
-                              assigned_to: new_issue.assigned_to,
-                              open: new_issue.open,
-                              status_text: new_issue.status_text
-                          })
-                      }, error => {
-                          console.log('Error creating issue');
-                      })
-              })
-          }, error => {
-              console.log('Error retrieving project', error);
+                          let new_issue = {};
+
+                          new_issue.issue_title = req.body.issue_title;
+                          new_issue.issue_text = req.body.issue_text;
+                          new_issue.created_by = req.body.created_by;
+                          new_issue.created_on = Firestore.Timestamp.fromDate(new Date());
+                          new_issue.updated_on = Firestore.Timestamp.fromDate(new Date());
+                          new_issue.open = true;
+                          new_issue.project_id = data.id;
+
+                          for (let optionalValue of ['assigned_to', 'status_text']) {
+                              if (req.body[optionalValue] === undefined) {
+                                  new_issue[optionalValue] = '';
+                              } else {
+                                  new_issue[optionalValue] = req.body[optionalValue];
+                              }
+                          }
+
+                          console.table(new_issue);
+
+                          createIssue(new_issue);
+
+                          }, error => {
+                            console.log('Unable to create project');
+                          }
+
+                      )
+              } else {
+                  projectObj.forEach(project => {
+                      let project_id = project.id;
+                      let new_issue = {};
+
+                      new_issue.issue_title = req.body.issue_title;
+                      new_issue.issue_text = req.body.issue_text;
+                      new_issue.created_by = req.body.created_by;
+                      new_issue.created_on = Firestore.Timestamp.fromDate(new Date());
+                      new_issue.updated_on = Firestore.Timestamp.fromDate(new Date());
+                      new_issue.open = true;
+                      new_issue.project_id = project.id;
+
+                      for (let optionalValue of ['assigned_to', 'status_text']) {
+                          if (req.body[optionalValue] === undefined) {
+                              new_issue[optionalValue] = '';
+                          } else {
+                              new_issue[optionalValue] = req.body[optionalValue];
+                          }
+                      }
+
+                      console.table(new_issue);
+
+                      createIssue(new_issue);
+                  })
+              }
           })
+          }, error => {
+            console.log('Error retrieving project', error);
+        }
 
-
-      
-    })
+    )
     
     .put(function (req, res){
       let projectName = req.params.project;
